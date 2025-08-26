@@ -126,7 +126,7 @@ Evaluates a parsed AST against data.
 ## Compliance & Coverage
 
 - Partial **RFC 9535** implementation
-- **Passing 400/702 JSONPath compliance tests**
+- **Passing 400/702 JSONPath compliance tests** ([link](https://github.com/jsonpath-standard/jsonpath-compliance-test-suite/tree/main))
 - Work in progress for full RFC coverage
 
 ---
