@@ -1,4 +1,4 @@
-defmodule Jsonpath.MixProject do
+defmodule JsonPath.MixProject do
   use Mix.Project
 
   def project do
@@ -9,7 +9,9 @@ defmodule Jsonpath.MixProject do
       start_permanent: Mix.env() == :prod,
       compilers: [:yecc, :leex] ++ Mix.compilers(),
       erlc_paths: ["lib/token"],
-      deps: deps()
+      deps: deps(),
+      description: description(),
+      package: package()
     ]
   end
 
@@ -23,7 +25,22 @@ defmodule Jsonpath.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:jason, "1.4.4"}
+      {:jason, "1.4.4", only: :test},
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+    ]
+  end
+
+  defp description() do
+    "This library supports querying nested maps and lists using JSONPath syntax.\n
+    It currently implements a **partial subset of [RFC 9535](https://www.rfc-editor.org/rfc/rfc9535.html)** and passes **400/702 compliance tests**."
+  end
+
+  defp package() do
+    [
+      # These are the default files included in the package
+      files: ~w(lib mix.exs README* LICENSE*),
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => "https://github.com/jaronoff97/elixir-jsonpath"}
     ]
   end
 end

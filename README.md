@@ -1,5 +1,10 @@
 # JsonPath for Elixir
 
+[![Hex.pm](https://img.shields.io/hexpm/v/jsonpath?color=brightgreen&style=flat-square)](https://hex.pm/packages/jsonpath)
+
+> [!WARNING]
+> This Package is EXPERIMENTAL and in development. It may not be suitable for production use.
+
 A **minimal JSONPath engine in Elixir** using **LEEX + YECC** generated modules.
 
 This library supports querying nested maps and lists using JSONPath syntax.
