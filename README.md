@@ -26,19 +26,19 @@ It currently implements a **partial subset of [RFC 9535](https://www.rfc-editor.
 
 Add to your `mix.exs`:
 
-\```elixir
+```elixir
 def deps do
   [
     {:json_path, "~> 0.1.0"}
   ]
 end
-\```
+```
 
 Then fetch dependencies:
 
-\```bash
+```bash
 mix deps.get
-\```
+```
 
 ---
 
@@ -46,7 +46,7 @@ mix deps.get
 
 ### Basic Queries
 
-\```elixir
+```elixir
 data = %{
   "store" => %{
     "book" => [
@@ -64,13 +64,13 @@ JsonPath.query(data, "$.store.book[*].price")
 # Get bicycle color
 JsonPath.query(data, "$.store.bicycle.color")
 # => [{"$['store']['bicycle']['color']", "red"}]
-\```
+```
 
 ---
 
 ### Advanced Queries
 
-\```elixir
+```elixir
 # Descendant selector
 JsonPath.query(data, "$..price")
 # => [{"$['store']['book'][0]['price']", 15}, {"$['store']['book'][1]['price']", 20}, {"$['store']['bicycle']['price']", 100}]
@@ -94,7 +94,7 @@ JsonPath.query(data, "$..book[?@.price<20]")
 # Logical filter (AND/OR)
 JsonPath.query(data, "$..book[?@.price>10 && @.price<30]")
 # => books with 10 < price < 30
-\```
+```
 
 ---
 
