@@ -90,18 +90,20 @@ defmodule JsonPath do
   """
   @spec evaluate(ast(), map() | list(), keyword()) :: eval_result() | {:error, any()}
   def evaluate(ast, data, opts \\ []) do
+    opts_with_root = Keyword.put(opts, :root_data, data)
+
     case ast do
       {:jsonpath, :root, segments} when is_list(segments) ->
-        traverse([{["$"], data}], segments, opts)
+        traverse([{["$"], data}], segments, opts_with_root)
 
       %{root: :root, segments: segs} when is_list(segs) ->
-        traverse([{["$"], data}], segs, opts)
+        traverse([{["$"], data}], segs, opts_with_root)
 
       %{segments: segs} when is_list(segs) ->
-        traverse([{["$"], data}], segs, opts)
+        traverse([{["$"], data}], segs, opts_with_root)
 
       {:path, segs} when is_list(segs) ->
-        traverse([{["$"], data}], segs, opts)
+        traverse([{["$"], data}], segs, opts_with_root)
 
       other ->
         {:error, {:invalid_ast, other}}
@@ -149,12 +151,18 @@ defmodule JsonPath do
     do: Enum.map(nodes, fn {p, v} -> {path_join(p), v} end)
 
   defp traverse(nodes, [seg | rest], opts) do
+    # Pass root data through opts for absolute queries in filters
+    root_data = Keyword.get(opts, :root_data)
+
+    opts_with_root =
+      if root_data, do: opts, else: Keyword.put(opts, :root_data, get_root_data(nodes))
+
     expanded =
       Enum.flat_map(nodes, fn {path, node} ->
-        apply_segment(seg, {path, node}, opts)
+        apply_segment(seg, {path, node}, opts_with_root)
       end)
 
-    traverse(expanded, rest, opts)
+    traverse(expanded, rest, opts_with_root)
   end
 
   # apply child or descendant segment
@@ -251,18 +259,17 @@ defmodule JsonPath do
     end)
   end
 
-  defp apply_selector({:filter, expr}, {path, node}, _mode) do
-    # filter applies to arrays/objects; for objects, iterate its children; for arrays, iterate elements
+  defp apply_selector({:filter, expr}, {path, node}, opts) do
     case node do
       l when is_list(l) ->
         Enum.with_index(l)
         |> Enum.flat_map(fn {v, i} ->
-          if eval_filter(expr, v), do: [{path ++ [i], v}], else: []
+          if eval_filter(expr, v, opts), do: [{path ++ [i], v}], else: []
         end)
 
       %{} = m ->
         Enum.flat_map(Map.to_list(m), fn {k, v} ->
-          if eval_filter(expr, v), do: [{path ++ [to_string(k)], v}], else: []
+          if eval_filter(expr, v, opts), do: [{path ++ [to_string(k)], v}], else: []
         end)
 
       _ ->
@@ -311,45 +318,67 @@ defmodule JsonPath do
   ## FILTER EVAL: evaluation of filter AST nodes against a value.
   ## Basic implementation: literals, existence tests via `@.name` are supported, comparisons.
 
-  defp eval_filter({:or, a, b}, node), do: eval_filter(a, node) or eval_filter(b, node)
-  defp eval_filter({:and, a, b}, node), do: eval_filter(a, node) and eval_filter(b, node)
-  defp eval_filter({:not, a}, node), do: not eval_filter(a, node)
+  defp eval_filter({:or, a, b}, node, opts),
+    do: eval_filter(a, node, opts) or eval_filter(b, node, opts)
 
-  defp eval_filter({:cmp, op, left, right}, node) do
-    l = eval_primary(left, node)
-    r = eval_primary(right, node)
+  defp eval_filter({:and, a, b}, node, opts),
+    do: eval_filter(a, node, opts) and eval_filter(b, node, opts)
+
+  defp eval_filter({:not, a}, node, opts), do: not eval_filter(a, node, opts)
+
+  defp eval_filter({:cmp, op, left, right}, node, opts) do
+    l = eval_primary(left, node, opts)
+    r = eval_primary(right, node, opts)
     compare_values(op, l, r)
   end
 
-  defp eval_filter({:query, :relative, qsegs}, node) do
-    # run a tiny singular query starting at node; returns truthy if selects >= 1
+  defp eval_filter({:query, :relative, qsegs}, node, _opts) do
     results = run_singular_query(node, qsegs)
     length(results) > 0
   end
 
-  defp eval_filter({:query, :absolute, _}, _node) do
-    # absolute ($) not implemented in filter context for demo; return false
-    false
+  defp eval_filter({:query, :absolute, qsegs}, _node, opts) do
+    case Keyword.get(opts, :root_data) do
+      nil ->
+        # No root data available, cannot evaluate absolute query
+        false
+
+      root_data ->
+        # Execute absolute query from root
+        results = run_singular_query(root_data, qsegs)
+        length(results) > 0
+    end
   end
 
-  defp eval_filter({:function, name, args}, node) do
-    # Evaluate function arguments
-    evaluated_args = Enum.map(args, &eval_primary(&1, node))
+  defp eval_filter({:function, name, args}, node, opts) do
+    evaluated_args = Enum.map(args, &eval_primary(&1, node, opts))
     apply_function(name, evaluated_args, node)
   end
 
-  defp eval_primary({:function, name, args}, node) do
-    evaluated_args = Enum.map(args, &eval_primary(&1, node))
+  defp eval_primary({:function, name, args}, node, opts) do
+    evaluated_args = Enum.map(args, &eval_primary(&1, node, opts))
     apply_function(name, evaluated_args, node)
   end
 
-  defp eval_primary({:lit, v}, _node), do: v
+  defp eval_primary({:lit, v}, _node, _opts), do: v
 
-  defp eval_primary({:query, :relative, qsegs}, node) do
-    # return first literal value if query returns one element
+  defp eval_primary({:query, :relative, qsegs}, node, _opts) do
     case run_singular_query(node, qsegs) do
       [{_path, val} | _] -> val
       [] -> nil
+    end
+  end
+
+  defp eval_primary({:query, :absolute, qsegs}, _node, opts) do
+    case Keyword.get(opts, :root_data) do
+      nil ->
+        nil
+
+      root_data ->
+        case run_singular_query(root_data, qsegs) do
+          [{_path, val} | _] -> val
+          [] -> nil
+        end
     end
   end
 
@@ -487,4 +516,7 @@ defmodule JsonPath do
         end
     end
   end
+
+  defp get_root_data([{["$"], root_data} | _]), do: root_data
+  defp get_root_data(_), do: nil
 end
