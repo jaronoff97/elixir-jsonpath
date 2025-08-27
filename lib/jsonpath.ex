@@ -449,8 +449,8 @@ defmodule JsonPath do
 
   defp eval_primary({:query, :relative, qsegs}, node, _opts) do
     case run_singular_query(node, qsegs) do
+      [] -> :nothing
       [{_path, val} | _] -> val
-      [] -> nil
     end
   end
 

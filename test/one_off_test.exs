@@ -135,38 +135,31 @@ defmodule OneOffTest do
       assert [first_result] == test_case["result"]
     end
 
-    test "equals self" do
+    test "not-equals null, absent from data" do
       data = ~s({
-        "name": "equals self",
-        "selector": "$[?@==@]",
+        "name": "not-equals null, absent from data",
+        "selector": "$[?@.a!=null]",
         "document": [
-          1,
-          null,
-          true,
           {
-            "a": "b"
+            "d": "e"
           },
-          [
-            false
-          ]
+          {
+            "a": "c",
+            "d": "f"
+          }
         ],
         "result": [
-          1,
-          null,
-          true,
           {
-            "a": "b"
+            "d": "e"
           },
-          [
-            false
-          ]
+          {
+            "a": "c",
+            "d": "f"
+          }
         ],
         "result_paths": [
           "$[0]",
-          "$[1]",
-          "$[2]",
-          "$[3]",
-          "$[4]"
+          "$[1]"
         ]
       })
       test_case = Jason.decode!(data)
@@ -181,6 +174,18 @@ defmodule OneOffTest do
         assert path == Enum.at(test_case["result_paths"], index)
         assert res == Enum.at(test_case["result"], index)
       end)
+    end
+
+    test "double quotes, surrogate pair 😀" do
+      result_pairs =
+        JsonPath.query(
+          %{
+            "😀": "A"
+          },
+          "$[\"\\uD83D\\uDE00\"]"
+        )
+
+      assert [{"$['😀']", "A"}] == result_pairs
     end
 
     test "filter on primitive value with length" do
