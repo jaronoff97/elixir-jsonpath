@@ -75,37 +75,60 @@ defmodule JsonPath do
 
   ## Parameters
 
-    * `ast` - the parsed JSONPath AST
-    * `data` - Elixir map or list to evaluate against
+  * `ast` - the parsed JSONPath AST
+  * `data` - Elixir map or list to evaluate against
+
+  ## Options
+    * `:key_mode` - controls how keys are looked up in maps
+      * `:string` (default) → only string keys (JSON spec)
+      * `:atom` → only atom keys
+      * `:both` → try string first, then atom
 
   ## Returns
 
-    * list of tuples `{path_string, value}`
+  * list of tuples `{path_string, value}`
   """
-  @spec evaluate(ast(), map() | list()) :: eval_result() | {:error, any()}
-  def evaluate(ast, data) do
+  @spec evaluate(ast(), map() | list(), keyword()) :: eval_result() | {:error, any()}
+  def evaluate(ast, data, opts \\ []) do
     case ast do
-      {:jsonpath, :root, segments} when is_list(segments) -> traverse([{["$"], data}], segments)
-      %{root: :root, segments: segs} when is_list(segs) -> traverse([{["$"], data}], segs)
-      %{segments: segs} when is_list(segs) -> traverse([{["$"], data}], segs)
-      {:path, segs} when is_list(segs) -> traverse([{["$"], data}], segs)
-      other -> {:error, {:invalid_ast, other}}
+      {:jsonpath, :root, segments} when is_list(segments) ->
+        traverse([{["$"], data}], segments, opts)
+
+      %{root: :root, segments: segs} when is_list(segs) ->
+        traverse([{["$"], data}], segs, opts)
+
+      %{segments: segs} when is_list(segs) ->
+        traverse([{["$"], data}], segs, opts)
+
+      {:path, segs} when is_list(segs) ->
+        traverse([{["$"], data}], segs, opts)
+
+      other ->
+        {:error, {:invalid_ast, other}}
     end
   end
 
   @doc """
   Convenience function: parse and evaluate a JSONPath query string in one call.
 
+
+  ## Options
+    * `:key_mode` - controls how keys are looked up in maps
+      * `:string` (default) → only string keys (JSON spec)
+      * `:atom` → only atom keys
+      * `:both` → try string first, then atom
+
   ## Example
 
       iex> JsonPath.query(%{"a" => 1}, "$.a")
       [{"$['a']", 1}]
   """
-  @spec query(map() | list(), String.t()) :: eval_result() | {:error, any()}
-  def query(data, path_string) when is_binary(path_string) and (is_map(data) or is_list(data)) do
+  @spec query(map() | list(), String.t(), keyword()) :: eval_result() | {:error, any()}
+  def query(data, path_string, opts \\ [])
+      when is_binary(path_string) and (is_map(data) or is_list(data)) do
     with {:ok, tokens, _line} <- tokenize(path_string),
          {:ok, ast} <- parse(tokens) do
-      evaluate(ast, data)
+      evaluate(ast, data, opts)
     else
       {:error, reason} -> {:error, reason}
     end
@@ -121,30 +144,30 @@ defmodule JsonPath do
     end
   end
 
-  @spec traverse(list({path(), any()}), list(any())) :: eval_result()
-  defp traverse(nodes, []), do: Enum.map(nodes, fn {p, v} -> {path_join(p), v} end)
+  @spec traverse(list({path(), any()}), list(any()), keyword()) :: eval_result()
+  defp traverse(nodes, [], _opts),
+    do: Enum.map(nodes, fn {p, v} -> {path_join(p), v} end)
 
-  defp traverse(nodes, [seg | rest]) do
+  defp traverse(nodes, [seg | rest], opts) do
     expanded =
       Enum.flat_map(nodes, fn {path, node} ->
-        apply_segment(seg, {path, node})
+        apply_segment(seg, {path, node}, opts)
       end)
 
-    traverse(expanded, rest)
+    traverse(expanded, rest, opts)
   end
 
   # apply child or descendant segment
-  defp apply_segment({child_type, selectors}, {path, node}) do
+  defp apply_segment({child_type, selectors}, {path, node}, opts) do
     case child_type do
       :child ->
-        Enum.flat_map(selectors, fn sel -> apply_selector(sel, {path, node}, :child) end)
+        Enum.flat_map(selectors, fn sel -> apply_selector(sel, {path, node}, opts) end)
 
       :descendant ->
-        # descendant: node itself then recursively into children
         nodes = collect_descendants({path, node})
 
         Enum.flat_map(nodes, fn n ->
-          Enum.flat_map(selectors, &apply_selector(&1, n, :descendant))
+          Enum.flat_map(selectors, &apply_selector(&1, n, opts))
         end)
     end
   end
@@ -173,21 +196,17 @@ defmodule JsonPath do
     base ++ children
   end
 
-  defp apply_selector({:name, name}, {path, node}, _mode) when is_binary(name) do
+  defp apply_selector({:name, name}, {path, node}, opts) do
     case node do
       %{} = m ->
-        case Map.fetch(m, name) do
-          {:ok, v} -> [{path ++ [name], v}]
+        case lookup(m, name, opts) do
+          {:ok, v, actual_key} -> [{path ++ [actual_key], v}]
           :error -> []
         end
 
       _ ->
         []
     end
-  end
-
-  defp apply_selector({:name, name}, {path, node}, _mode) when is_atom(name) do
-    apply_selector({:name, to_string(name)}, {path, node}, :child)
   end
 
   defp apply_selector({:wildcard}, {path, node}, _mode) do
@@ -313,6 +332,17 @@ defmodule JsonPath do
     false
   end
 
+  defp eval_filter({:function, name, args}, node) do
+    # Evaluate function arguments
+    evaluated_args = Enum.map(args, &eval_primary(&1, node))
+    apply_function(name, evaluated_args, node)
+  end
+
+  defp eval_primary({:function, name, args}, node) do
+    evaluated_args = Enum.map(args, &eval_primary(&1, node))
+    apply_function(name, evaluated_args, node)
+  end
+
   defp eval_primary({:lit, v}, _node), do: v
 
   defp eval_primary({:query, :relative, qsegs}, node) do
@@ -322,6 +352,24 @@ defmodule JsonPath do
       [] -> nil
     end
   end
+
+  defp apply_function("length", [value], _node) when is_list(value), do: length(value)
+  defp apply_function("length", [value], _node) when is_map(value), do: map_size(value)
+  defp apply_function("length", [_], _node), do: 0
+
+  defp apply_function("value", [query_result], _node) do
+    # value() function extracts the first result from a query
+    case query_result do
+      [{_path, val} | _] -> val
+      [] -> nil
+      # if already a literal
+      val -> val
+    end
+  end
+
+  defp apply_function("count", args, _node), do: length(args)
+  # Unknown function
+  defp apply_function(_name, _args, _node), do: nil
 
   defp compare_values(:eq, a, b), do: a == b
   defp compare_values(:ne, a, b), do: a != b
@@ -367,6 +415,28 @@ defmodule JsonPath do
               _ ->
                 []
             end
+
+          {:qwildcard} ->
+            case node do
+              %{} = m ->
+                Enum.map(Map.to_list(m), fn {k, v} -> {path ++ [to_string(k)], v} end)
+
+              l when is_list(l) ->
+                Enum.with_index(l) |> Enum.map(fn {v, i} -> {path ++ [i], v} end)
+
+              _ ->
+                []
+            end
+
+          {:qslice, slice} ->
+            case node do
+              l when is_list(l) ->
+                indices = normalize_slice(length(l), slice)
+                Enum.map(indices, fn i -> {path ++ [i], Enum.at(l, i)} end)
+
+              _ ->
+                []
+            end
         end
       end)
 
@@ -378,6 +448,43 @@ defmodule JsonPath do
       Enum.map_join(tl(parts), "", fn
         part when is_integer(part) -> "[#{part}]"
         part when is_binary(part) -> "['#{part}']"
+        part when is_atom(part) -> "['#{Atom.to_string(part)}']"
       end)
+  end
+
+  defp lookup(map, key, opts) when is_map(map) do
+    mode = Keyword.get(opts, :key_mode, :string)
+
+    case {mode, key} do
+      {:string, k} ->
+        case Map.fetch(map, to_string(k)) do
+          {:ok, v} -> {:ok, v, to_string(k)}
+          :error -> :error
+        end
+
+      {:atom, k} when is_binary(k) ->
+        atom_key = String.to_existing_atom(k)
+
+        case Map.fetch(map, atom_key) do
+          {:ok, v} -> {:ok, v, atom_key}
+          :error -> :error
+        end
+
+      {:both, k} ->
+        str_k = to_string(k)
+
+        case Map.fetch(map, str_k) do
+          {:ok, v} ->
+            {:ok, v, str_k}
+
+          :error ->
+            atom_k = String.to_existing_atom(str_k)
+
+            case Map.fetch(map, atom_k) do
+              {:ok, v} -> {:ok, v, atom_k}
+              :error -> :error
+            end
+        end
+    end
   end
 end

@@ -25,9 +25,9 @@
 %%     QSeg  = {qname, Name} | {qindex, I}
 %%--------------------------------------------------------------------
 
-Nonterminals jsonpath segments segment selector_list selector selector_items or_expr and_expr unary_expr comp_expr primary literal q_segments q_seg slice .
+Nonterminals jsonpath segments segment selector_list selector selector_items or_expr and_expr unary_expr comp_expr primary literal q_segments q_seg slice function_call arg_list .
 
-Terminals DOLLAR AT DDOT DOT LBRACK RBRACK LPAREN RPAREN COMMA COLON STAR QMARK AND OR NOT EQ NE LE GE LT GT NUMBER STRING IDENT .
+Terminals DOLLAR AT DDOT DOT LBRACK RBRACK LPAREN RPAREN COMMA COLON STAR QMARK AND OR NOT EQ NE LE GE LT GT NUMBER STRING IDENT TRUE FALSE NULL .
 
 Rootsymbol jsonpath .
 
@@ -76,7 +76,7 @@ selector -> STAR : { wildcard } .
 
 selector -> slice : { slice , '$1' } .
 
-selector -> QMARK LPAREN or_expr RPAREN : { filter , '$3' } .
+selector -> QMARK or_expr : { filter , '$2' } .
 
 %% Slices (minimal set that evaluator normalizes)
 slice -> NUMBER COLON NUMBER : { start_end , unwrap_number( '$1' ) , unwrap_number( '$3' ) } .
@@ -124,7 +124,11 @@ comp_expr -> primary : '$1' .
 
 primary -> literal : '$1' .
 
+primary -> function_call : '$1' .
+
 primary -> AT q_segments : { query , relative , '$2' } .
+
+primary -> AT : { query , relative , [ ] } .
 
 primary -> DOLLAR q_segments : { query , absolute , '$2' } .
 
@@ -137,14 +141,36 @@ q_segments -> q_segments q_seg : '$1' ++ [ '$2' ] .
 
 q_seg -> DOT IDENT : { qname , unwrap_ident( '$2' ) } .
 
+q_seg -> DOT STAR : { qwildcard } .
+
 q_seg -> LBRACK STRING RBRACK : { qname , unwrap_string( '$2' ) } .
 
 q_seg -> LBRACK NUMBER RBRACK : { qindex , unwrap_number( '$2' ) } .
 
-%% Literals (numbers and strings only for now)
-literal -> NUMBER : unwrap_number( '$1' ) .
+q_seg -> LBRACK STAR RBRACK : { qwildcard } .
 
-literal -> STRING : unwrap_string( '$1' ) .
+q_seg -> LBRACK slice RBRACK : { qslice , '$2' } .
+
+%% Literals (numbers, strings, booleans, null)
+literal -> NUMBER : { lit , unwrap_number( '$1' ) } .
+
+literal -> STRING : { lit , unwrap_string( '$1' ) } .
+
+literal -> TRUE : { lit , true } .
+
+literal -> FALSE : { lit , false } .
+
+literal -> NULL : { lit , null } .
+
+%% Function calls
+function_call -> IDENT LPAREN RPAREN : { function , unwrap_ident( '$1' ) , [ ] } .
+
+function_call -> IDENT LPAREN arg_list RPAREN : { function , unwrap_ident( '$1' ) , '$3' } .
+
+%% Function argument list
+arg_list -> or_expr : [ '$1' ] .
+
+arg_list -> arg_list COMMA or_expr : '$1' ++ [ '$3' ] .
 
 %% ===================================================================
 %% Erlang helper code
