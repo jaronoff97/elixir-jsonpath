@@ -157,51 +157,97 @@ defmodule JsonPath do
     opts_with_root =
       if root_data, do: opts, else: Keyword.put(opts, :root_data, get_root_data(nodes))
 
+    IO.inspect(nodes, label: :nodes)
+
     expanded =
       Enum.flat_map(nodes, fn {path, node} ->
         apply_segment(seg, {path, node}, opts_with_root)
       end)
 
+    IO.inspect(expanded, label: :expanded)
     traverse(expanded, rest, opts_with_root)
   end
 
   # apply child or descendant segment
   defp apply_segment({child_type, selectors}, {path, node}, opts) do
+    IO.inspect({child_type, selectors, path, node}, label: "apply_segment")
+
     case child_type do
       :child ->
-        Enum.flat_map(selectors, fn sel -> apply_selector(sel, {path, node}, opts) end)
+        result =
+          Enum.flat_map(selectors, fn sel ->
+            IO.inspect({:applying_child_selector, sel}, label: "child_selector")
+            apply_selector(sel, {path, node}, opts)
+          end)
+
+        IO.inspect(result, label: "child_result")
+        result
 
       :descendant ->
         nodes = collect_descendants({path, node})
+        IO.inspect(nodes, label: :descendant_nodes)
 
-        Enum.flat_map(nodes, fn n ->
-          Enum.flat_map(selectors, &apply_selector(&1, n, opts))
-        end)
+        result =
+          Enum.flat_map(nodes, fn n ->
+            IO.inspect({:applying_descendant_selector_to, n}, label: "descendant_node")
+
+            Enum.flat_map(selectors, fn sel ->
+              IO.inspect({:selector, sel}, label: "descendant_selector")
+              apply_selector(sel, n, opts)
+            end)
+          end)
+
+        IO.inspect(result, label: "descendant_result")
+        result
     end
   end
 
   defp collect_descendants({path, value}) do
     # include the node itself
     base = [{path, value}]
+    IO.inspect({path, value, "collecting_descendants"}, label: "collect_start")
 
     children =
       case value do
         %{} = m ->
-          Enum.flat_map(Map.to_list(m), fn {k, v} ->
-            collect_descendants({path ++ [to_string(k)], v})
-          end)
+          IO.inspect({path, m, "map_descendants"}, label: "collect_map")
+
+          result =
+            Enum.flat_map(Map.to_list(m), fn {k, v} ->
+              child_path = path ++ [to_string(k)]
+              IO.inspect({child_path, v, "recursing_into_map_child"}, label: "collect_map_child")
+              collect_descendants({child_path, v})
+            end)
+
+          IO.inspect(result, label: "map_children_result")
+          result
 
         l when is_list(l) ->
-          Enum.with_index(l)
-          |> Enum.flat_map(fn {v, idx} ->
-            collect_descendants({path ++ [idx], v})
-          end)
+          IO.inspect({path, l, "list_descendants"}, label: "collect_list")
+
+          result =
+            Enum.with_index(l)
+            |> Enum.flat_map(fn {v, idx} ->
+              child_path = path ++ [idx]
+
+              IO.inspect({child_path, v, "recursing_into_list_child"},
+                label: "collect_list_child"
+              )
+
+              collect_descendants({child_path, v})
+            end)
+
+          IO.inspect(result, label: "list_children_result")
+          result
 
         _ ->
+          IO.inspect({path, value, "primitive_no_descendants"}, label: "collect_primitive")
           []
       end
 
-    base ++ children
+    total_result = base ++ children
+    IO.inspect(total_result, label: "collect_total_result for #{inspect(path)}")
+    total_result
   end
 
   defp apply_selector({:name, name}, {path, node}, opts) do
@@ -260,19 +306,34 @@ defmodule JsonPath do
   end
 
   defp apply_selector({:filter, expr}, {path, node}, opts) do
+    IO.inspect({:applying_filter, expr, path, node}, label: "filter_application")
+
     case node do
       l when is_list(l) ->
+        IO.inspect(l, label: :filtering_list)
+
         Enum.with_index(l)
         |> Enum.flat_map(fn {v, i} ->
-          if eval_filter(expr, v, opts), do: [{path ++ [i], v}], else: []
+          filter_result = eval_filter(expr, v, opts)
+          IO.inspect({v, expr, filter_result}, label: "list_filter_eval")
+          if filter_result, do: [{path ++ [i], v}], else: []
         end)
 
       %{} = m ->
-        Enum.flat_map(Map.to_list(m), fn {k, v} ->
-          if eval_filter(expr, v, opts), do: [{path ++ [to_string(k)], v}], else: []
-        end)
+        IO.inspect(m, label: :filtering_map_directly)
+        # This branch handles when we're filtering a map directly (not its contents)
+        # We need to apply the filter to the map itself
+        filter_result = eval_filter(expr, m, opts)
+        IO.inspect({m, expr, filter_result}, label: "direct_map_filter_eval")
+        if filter_result, do: [{path, m}], else: []
+
+      s when is_binary(s) ->
+        filter_result = eval_filter(expr, s, opts)
+        IO.inspect({s, expr, filter_result}, label: "string_filter_eval")
+        if filter_result, do: [{path, s}], else: []
 
       _ ->
+        IO.inspect({node, "no_filter_applicable"}, label: "filter_skip")
         []
     end
   end
@@ -329,37 +390,61 @@ defmodule JsonPath do
   defp eval_filter({:cmp, op, left, right}, node, opts) do
     l = eval_primary(left, node, opts)
     r = eval_primary(right, node, opts)
+    IO.inspect({l, r, compare_values(op, l, r)}, label: "cmp l r")
     compare_values(op, l, r)
   end
 
   defp eval_filter({:query, :relative, qsegs}, node, _opts) do
     results = run_singular_query(node, qsegs)
-    length(results) > 0
+    IO.inspect(results, label: "filter_query_results for #{inspect(node)}")
+
+    # Check if we got any non-nil results
+    case results do
+      [] -> false
+      # Explicitly handle nil values
+      [{_path, nil}] -> false
+      [{_path, _value} | _] -> true
+      _ -> false
+    end
   end
 
   defp eval_filter({:query, :absolute, qsegs}, _node, opts) do
     case Keyword.get(opts, :root_data) do
       nil ->
-        # No root data available, cannot evaluate absolute query
         false
 
       root_data ->
-        # Execute absolute query from root
         results = run_singular_query(root_data, qsegs)
-        length(results) > 0
+        IO.inspect(results, label: "absolute_filter_query_results")
+
+        # Check if we got any non-nil results
+        case results do
+          [] -> false
+          # Explicitly handle nil values
+          [{_path, nil}] -> false
+          [{_path, _value} | _] -> true
+          _ -> false
+        end
     end
   end
 
   defp eval_filter({:function, name, args}, node, opts) do
     evaluated_args = Enum.map(args, &eval_primary(&1, node, opts))
+    IO.inspect({name, evaluated_args, node}, label: :eval_filter_function)
     apply_function(name, evaluated_args, node)
   end
 
   defp eval_primary({:function, name, args}, node, opts) do
     evaluated_args = Enum.map(args, &eval_primary(&1, node, opts))
+
+    IO.inspect({name, evaluated_args, node, apply_function(name, evaluated_args, node)},
+      label: :eval_primary_function
+    )
+
     apply_function(name, evaluated_args, node)
   end
 
+  defp eval_primary({:lit, :null}, _node, _opts), do: nil
   defp eval_primary({:lit, v}, _node, _opts), do: v
 
   defp eval_primary({:query, :relative, qsegs}, node, _opts) do
@@ -382,9 +467,25 @@ defmodule JsonPath do
     end
   end
 
-  defp apply_function("length", [value], _node) when is_list(value), do: length(value)
-  defp apply_function("length", [value], _node) when is_map(value), do: map_size(value)
-  defp apply_function("length", [_], _node), do: 0
+  defp apply_function("length", [value], _node) do
+    cond do
+      is_list(value) ->
+        length(value)
+
+      is_map(value) ->
+        map_size(value)
+
+      is_binary(value) ->
+        String.length(value)
+
+      match?([_ | _], value) and is_tuple(hd(value)) ->
+        # JSONPath query result list of {path, val}
+        length(value)
+
+      true ->
+        0
+    end
+  end
 
   defp apply_function("value", [query_result], _node) do
     # value() function extracts the first result from a query
@@ -396,17 +497,98 @@ defmodule JsonPath do
     end
   end
 
-  defp apply_function("count", args, _node), do: length(args)
+  defp apply_function("count", _args, nodes) when is_list(nodes), do: length(nodes)
+  defp apply_function("count", _args, nodes) when is_map(nodes), do: map_size(nodes)
   # Unknown function
   defp apply_function(_name, _args, _node), do: nil
+  # Entry point
+  defp compare_values(:eq, a, b), do: equal?(a, b)
+  defp compare_values(:lt, a, b), do: less?(a, b)
 
-  defp compare_values(:eq, a, b), do: a == b
-  defp compare_values(:ne, a, b), do: a != b
-  defp compare_values(:lt, a, b) when is_number(a) and is_number(b), do: a < b
-  defp compare_values(:le, a, b) when is_number(a) and is_number(b), do: a <= b
-  defp compare_values(:gt, a, b) when is_number(a) and is_number(b), do: a > b
-  defp compare_values(:ge, a, b) when is_number(a) and is_number(b), do: a >= b
+  defp compare_values(:ne, a, b), do: not compare_values(:eq, a, b)
+  defp compare_values(:le, a, b), do: compare_values(:lt, a, b) or compare_values(:eq, a, b)
+  defp compare_values(:gt, a, b), do: compare_values(:lt, b, a)
+  defp compare_values(:ge, a, b), do: compare_values(:gt, a, b) or compare_values(:eq, a, b)
+
   defp compare_values(_, _, _), do: false
+
+  # --- RFC helpers ---
+
+  # equality
+  defp equal?(a, b) do
+    cond do
+      a == nil and b == nil ->
+        true
+
+      # empty nodelist / Nothing handling
+      a == :nothing and b == :nothing ->
+        true
+
+      a == :nothing and b == [] ->
+        true
+
+      b == :nothing and a == [] ->
+        true
+
+      a == :nothing or b == :nothing ->
+        false
+
+      a == [] and b == [] ->
+        true
+
+      a == [] or b == [] ->
+        false
+
+      # numbers (I-JSON interop assumed, i.e. IEEE 754 doubles + int64)
+      is_number(a) and is_number(b) ->
+        a == b
+
+      # strings
+      is_binary(a) and is_binary(b) ->
+        a == b
+
+      # booleans
+      is_boolean(a) and is_boolean(b) ->
+        a == b
+
+      # arrays
+      is_list(a) and is_list(b) ->
+        length(a) == length(b) and Enum.zip(a, b) |> Enum.all?(fn {x, y} -> equal?(x, y) end)
+
+      # objects (no duplicate keys)
+      is_map(a) and is_map(b) ->
+        Map.keys(a) |> Enum.sort() == Map.keys(b) |> Enum.sort() and
+          Enum.all?(Map.keys(a), fn k -> equal?(Map.fetch!(a, k), Map.fetch!(b, k)) end)
+
+      true ->
+        false
+    end
+  end
+
+  # ordering (<)
+  defp less?(a, b) do
+    cond do
+      # empty nodelists / Nothing => always false
+      a == [] or b == [] or a == :nothing or b == :nothing ->
+        false
+
+      # numbers
+      is_number(a) and is_number(b) ->
+        a < b
+
+      # strings (RFC: empty string < any non-empty, lexicographic order)
+      is_binary(a) and is_binary(b) ->
+        cond do
+          a == "" and b != "" -> true
+          a != "" and b == "" -> false
+          true -> a < b
+        end
+
+      # everything else cannot be ordered
+      true ->
+        false
+    end
+  end
 
   defp run_singular_query(node, qsegs) do
     # qsegs is list of {:qname, name} or {:qindex, idx}
@@ -424,10 +606,16 @@ defmodule JsonPath do
             case node do
               %{} = m ->
                 name_str = to_string(name)
+                IO.inspect({name_str, m, Map.has_key?(m, name_str)}, label: "qname_lookup")
 
                 case Map.fetch(m, name_str) do
-                  {:ok, v} -> [{path ++ [name_str], v}]
-                  :error -> []
+                  {:ok, v} ->
+                    IO.inspect({path ++ [name_str], v}, label: "qname_found")
+                    [{path ++ [name_str], v}]
+
+                  :error ->
+                    IO.inspect("qname_not_found", label: "qname_result")
+                    []
                 end
 
               _ ->
@@ -475,9 +663,14 @@ defmodule JsonPath do
   defp path_join(parts) do
     "$" <>
       Enum.map_join(tl(parts), "", fn
-        part when is_integer(part) -> "[#{part}]"
-        part when is_binary(part) -> "['#{part}']"
-        part when is_atom(part) -> "['#{Atom.to_string(part)}']"
+        part when is_integer(part) ->
+          "[#{part}]"
+
+        part when is_binary(part) ->
+          "['#{escape_json_string(part)}']"
+
+        part when is_atom(part) ->
+          "['#{escape_json_string(Atom.to_string(part))}']"
       end)
   end
 
@@ -519,4 +712,16 @@ defmodule JsonPath do
 
   defp get_root_data([{["$"], root_data} | _]), do: root_data
   defp get_root_data(_), do: nil
+
+  defp escape_json_string(s) do
+    s
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
+    |> String.replace("\'", "\\\'")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+    |> String.replace("\b", "\\b")
+    |> String.replace("\f", "\\f")
+  end
 end
