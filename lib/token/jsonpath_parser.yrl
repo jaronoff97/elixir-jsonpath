@@ -25,9 +25,9 @@
 %%     QSeg  = {qname, Name} | {qindex, I}
 %%--------------------------------------------------------------------
 
-Nonterminals jsonpath segments segment selector_list selector selector_items or_expr and_expr unary_expr comp_expr primary literal q_segments q_seg slice .
+Nonterminals jsonpath segments segment selector_list selector selector_items or_expr and_expr unary_expr comp_expr primary literal q_segments q_seg slice function_call arg_list .
 
-Terminals DOLLAR AT DDOT DOT LBRACK RBRACK LPAREN RPAREN COMMA COLON STAR QMARK AND OR NOT EQ NE LE GE LT GT NUMBER STRING IDENT .
+Terminals DOLLAR AT DDOT DOT LBRACK RBRACK LPAREN RPAREN COMMA COLON STAR QMARK AND OR NOT EQ NE LE GE LT GT NUMBER STRING IDENT TRUE FALSE NULL .
 
 Rootsymbol jsonpath .
 
@@ -76,20 +76,34 @@ selector -> STAR : { wildcard } .
 
 selector -> slice : { slice , '$1' } .
 
-selector -> QMARK LPAREN or_expr RPAREN : { filter , '$3' } .
+selector -> QMARK or_expr : { filter , '$2' } .
 
 %% Slices (minimal set that evaluator normalizes)
+% Basic cases
 slice -> NUMBER COLON NUMBER : { start_end , unwrap_number( '$1' ) , unwrap_number( '$3' ) } .
 
 slice -> NUMBER COLON NUMBER COLON NUMBER : { start_end_step , unwrap_number( '$1' ) , unwrap_number( '$3' ) , unwrap_number( '$5' ) } .
 
-slice -> NUMBER COLON : { start_end_omitted , unwrap_number( '$1' ) } .
-
+% Start omitted cases
 slice -> COLON NUMBER : { start_omitted_end , unwrap_number( '$2' ) } .
 
-slice -> COLON COLON NUMBER : { start_omitted_end_step , unwrap_number( '$3' ) } .
+slice -> COLON NUMBER COLON NUMBER : { start_omitted_end_step , unwrap_number( '$2' ) , unwrap_number( '$4' ) } .
 
+slice -> COLON NUMBER COLON : { start_omitted_end , unwrap_number( '$2' ) } .
+
+% End omitted cases
+slice -> NUMBER COLON : { start_end_omitted , unwrap_number( '$1' ) } .
+
+slice -> NUMBER COLON COLON : { start_end_omitted , unwrap_number( '$1' ) } .
+
+slice -> NUMBER COLON COLON NUMBER : { start_end_omitted_step , unwrap_number( '$1' ) , unwrap_number( '$4' ) } .
+
+% Both start and end omitted
 slice -> COLON : { omitted_all } .
+
+slice -> COLON COLON : { omitted_all } .
+
+slice -> COLON COLON NUMBER : { start_omitted_end_step , unwrap_number( '$3' ) } .
 
 %% -------------------------------------------------------------------
 %% Filter expressions
@@ -124,7 +138,13 @@ comp_expr -> primary : '$1' .
 
 primary -> literal : '$1' .
 
+primary -> function_call : '$1' .
+
 primary -> AT q_segments : { query , relative , '$2' } .
+
+primary -> AT : { query , relative , [ ] } .
+
+primary -> DOLLAR : { query , absolute , [ ] } .
 
 primary -> DOLLAR q_segments : { query , absolute , '$2' } .
 
@@ -137,14 +157,48 @@ q_segments -> q_segments q_seg : '$1' ++ [ '$2' ] .
 
 q_seg -> DOT IDENT : { qname , unwrap_ident( '$2' ) } .
 
+q_seg -> DOT STAR : { qwildcard } .
+
 q_seg -> LBRACK STRING RBRACK : { qname , unwrap_string( '$2' ) } .
 
 q_seg -> LBRACK NUMBER RBRACK : { qindex , unwrap_number( '$2' ) } .
 
-%% Literals (numbers and strings only for now)
-literal -> NUMBER : unwrap_number( '$1' ) .
+q_seg -> LBRACK STAR RBRACK : { qwildcard } .
 
-literal -> STRING : unwrap_string( '$1' ) .
+q_seg -> LBRACK slice RBRACK : { qslice , '$2' } .
+
+q_seg -> DDOT IDENT : { qdescendant_name , unwrap_ident( '$2' ) } .
+
+q_seg -> DDOT STAR : { qdescendant_wildcard } .
+
+q_seg -> DDOT LBRACK STRING RBRACK : { qdescendant_name , unwrap_string( '$3' ) } .
+
+q_seg -> DDOT LBRACK NUMBER RBRACK : { qdescendant_index , unwrap_number( '$3' ) } .
+
+q_seg -> DDOT LBRACK STAR RBRACK : { qdescendant_wildcard } .
+
+q_seg -> DDOT LBRACK slice RBRACK : { qdescendant_slice , '$3' } .
+
+%% Literals (numbers, strings, booleans, null)
+literal -> NUMBER : { lit , unwrap_number( '$1' ) } .
+
+literal -> STRING : { lit , unwrap_string( '$1' ) } .
+
+literal -> TRUE : { lit , true } .
+
+literal -> FALSE : { lit , false } .
+
+literal -> NULL : { lit , null } .
+
+%% Function calls
+function_call -> IDENT LPAREN RPAREN : { function , unwrap_ident( '$1' ) , [ ] } .
+
+function_call -> IDENT LPAREN arg_list RPAREN : { function , unwrap_ident( '$1' ) , '$3' } .
+
+%% Function argument list
+arg_list -> or_expr : [ '$1' ] .
+
+arg_list -> arg_list COMMA or_expr : '$1' ++ [ '$3' ] .
 
 %% ===================================================================
 %% Erlang helper code

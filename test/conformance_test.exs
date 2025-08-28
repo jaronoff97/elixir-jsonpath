@@ -30,14 +30,20 @@ defmodule JsonPathConformanceTest do
           try do
             case JsonPath.tokenize(selector) do
               {:error, reason} ->
-                assert invalid?,
-                       "Expected selector #{inspect(selector)} to be invalid, but tokenizer failed, reason: #{inspect(reason)}"
+                unless invalid? do
+                  flunk(
+                    "Expected selector #{inspect(selector)} to be valid, but tokenizer failed with reason: #{inspect(reason)}"
+                  )
+                end
 
               {:ok, tokens, _line} ->
                 case JsonPath.parse(tokens) do
                   {:error, reason} ->
-                    assert invalid?,
-                           "Expected selector #{inspect(selector)} to be invalid, but parser failed, reason: #{inspect(reason)}"
+                    unless invalid? do
+                      flunk(
+                        "Expected selector #{inspect(selector)} to be valid, but parser failed with reason: #{inspect(reason)}"
+                      )
+                    end
 
                   {:ok, ast} ->
                     if invalid? do
@@ -47,7 +53,9 @@ defmodule JsonPathConformanceTest do
                     else
                       case JsonPath.evaluate(ast, doc) do
                         {:error, reason} ->
-                          flunk("Evaluation error: #{inspect(reason)}")
+                          flunk(
+                            "Evaluation error for selector #{inspect(selector)}: #{inspect(reason)}"
+                          )
 
                         results when is_list(results) ->
                           result_values = Enum.map(results, fn {_path, val} -> val end)
@@ -56,22 +64,34 @@ defmodule JsonPathConformanceTest do
                           cond do
                             test_case["result"] ->
                               # Single result expectation
-                              assert result_values == test_case["result"],
-                                     "Selector #{inspect(selector)} produced #{inspect(result_values)} but expected #{inspect(test_case["result"])}"
+                              unless result_values == test_case["result"] do
+                                flunk(
+                                  "Selector #{inspect(selector)} produced #{inspect(result_values)} but expected #{inspect(test_case["result"])}"
+                                )
+                              end
 
                               if test_case["result_paths"] do
-                                assert result_paths == test_case["result_paths"],
-                                       "Selector #{inspect(selector)} produced paths #{inspect(result_paths)} but expected #{inspect(test_case["result_paths"])}"
+                                unless result_paths == test_case["result_paths"] do
+                                  flunk(
+                                    "Selector #{inspect(selector)} produced paths #{inspect(result_paths)} but expected #{inspect(test_case["result_paths"])}"
+                                  )
+                                end
                               end
 
                             test_case["results"] ->
                               # Multiple possible orderings
-                              assert result_values in test_case["results"],
-                                     "Selector #{inspect(selector)} produced #{inspect(result_values)} but expected one of #{inspect(test_case["results"])}"
+                              unless result_values in test_case["results"] do
+                                flunk(
+                                  "Selector #{inspect(selector)} produced #{inspect(result_values)} but expected one of #{inspect(test_case["results"])}"
+                                )
+                              end
 
                               if test_case["results_paths"] do
-                                assert result_paths in test_case["results_paths"],
-                                       "Selector #{inspect(selector)} produced paths #{inspect(result_paths)} but expected one of #{inspect(test_case["results_paths"])}"
+                                unless result_paths in test_case["results_paths"] do
+                                  flunk(
+                                    "Selector #{inspect(selector)} produced paths #{inspect(result_paths)} but expected one of #{inspect(test_case["results_paths"])}"
+                                  )
+                                end
                               end
 
                             true ->
@@ -83,8 +103,11 @@ defmodule JsonPathConformanceTest do
             end
           rescue
             error ->
-              assert invalid?,
-                     "Expected selector #{inspect(selector)} to be valid, but got error: #{inspect(error)}"
+              unless invalid? do
+                flunk(
+                  "Expected selector #{inspect(selector)} to be valid, but got error: #{Exception.message(error)}"
+                )
+              end
           end
         end
       end
