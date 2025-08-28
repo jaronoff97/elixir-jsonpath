@@ -344,35 +344,98 @@ defmodule JsonPath do
   end
 
   defp normalize_slice(len, {:start_end, s, e}), do: range_from_slice(len, s, e, 1)
-  defp normalize_slice(len, {:start_omitted_end, e}), do: range_from_slice(len, 0, e, 1)
-  defp normalize_slice(len, {:start_end_omitted, s}), do: range_from_slice(len, s, len, 1)
+
+  defp normalize_slice(len, {:start_end_omitted_step, s, step}),
+    do: range_from_slice(len, s, nil, step)
+
+  defp normalize_slice(len, {:start_omitted_end, e}), do: range_from_slice(len, nil, e, 1)
+
+  defp normalize_slice(len, {:start_omitted_end_step, e, step}),
+    do: range_from_slice(len, nil, e, step)
+
+  defp normalize_slice(len, {:start_end_omitted, s}), do: range_from_slice(len, s, nil, 1)
 
   defp normalize_slice(len, {:start_omitted_end_step, step}),
-    do: range_from_slice(len, 0, len, step)
+    do: range_from_slice(len, nil, nil, step)
 
-  defp normalize_slice(_len, {:omitted_all}), do: []
+  defp normalize_slice(len, {:omitted_all}), do: range_from_slice(len, nil, nil, 1)
 
   defp range_from_slice(len, start, stop, step) do
-    st = if start < 0, do: max(len + start, 0), else: min(start, len)
-    sp = if stop < 0, do: max(len + stop, 0), else: min(stop, len)
+    step = step || 1
 
-    cond do
-      step == 0 ->
-        []
+    # Return empty for zero step
+    if step == 0 do
+      []
+    else
+      # Handle negative indices and nil values
+      {st, sp} = normalize_start_stop(len, start, stop, step)
 
-      step > 0 ->
-        if st >= sp do
-          []
-        else
-          st..(sp - 1)//step |> Enum.to_list()
-        end
+      # Generate the range
+      generate_range(st, sp, step)
+    end
+  end
 
-      step < 0 ->
-        if st <= sp do
-          []
-        else
-          st..(sp + 1)//step |> Enum.to_list()
-        end
+  defp normalize_start_stop(len, start, stop, step) do
+    # Normalize start
+    st =
+      case start do
+        nil when step > 0 -> 0
+        nil when step < 0 -> len - 1
+        # Handle negative indices
+        n when n < 0 -> max(0, len + n)
+        # Out of bounds positive start
+        n when n >= len and step > 0 -> len
+        # Out of bounds positive start with negative step
+        n when n >= len and step < 0 -> len - 1
+        # Normal positive index, but ensure >= 0
+        n -> max(0, n)
+      end
+
+    # Normalize stop
+    sp =
+      case stop do
+        nil when step > 0 -> len
+        nil when step < 0 -> -1
+        # Handle negative indices, allow -1 for negative step
+        n when n < 0 -> max(-1, len + n)
+        # For positive step, cap at len
+        n when step > 0 -> min(n, len)
+        # For negative step, don't cap positive stop values
+        n -> n
+      end
+
+    # Additional bounds checking for start
+    st =
+      cond do
+        # Start beyond array for positive step
+        step > 0 and st >= len -> len
+        # Start before array for negative step
+        step < 0 and st < 0 -> -1
+        # Ensure non-negative for positive step
+        step > 0 -> max(0, st)
+        # Cap at last valid index for negative step
+        step < 0 -> min(st, len - 1)
+        true -> st
+      end
+
+    {st, sp}
+  end
+
+  defp generate_range(st, sp, step) when step > 0 do
+    if st >= sp do
+      []
+    else
+      # For positive step: start..(stop-1)//step
+      Enum.to_list(st..(sp - 1)//step)
+    end
+  end
+
+  defp generate_range(st, sp, step) when step < 0 do
+    if st <= sp do
+      []
+    else
+      # For negative step: start..(stop+1)//step
+      Enum.to_list(st..(sp + 1)//step)
     end
   end
 
@@ -497,8 +560,33 @@ defmodule JsonPath do
     end
   end
 
-  defp apply_function("count", _args, nodes) when is_list(nodes), do: length(nodes)
-  defp apply_function("count", _args, nodes) when is_map(nodes), do: map_size(nodes)
+  defp apply_function("count", [query_result], _node) do
+    # count() function counts the number of nodes returned by a query
+    case query_result do
+      # Query result is a list of {path, value} tuples
+      results when is_list(results) ->
+        length(results)
+
+      # If it's a single value, count as 1
+      _ ->
+        1
+    end
+  end
+
+  defp apply_function("match", [str, re], _nodes) when is_binary(str) and is_binary(re),
+    do: Regex.match?(Regex.compile!("^#{re}$"), str)
+
+  defp apply_function("search", [str, re], _nodes) when is_binary(str) and is_binary(re) do
+    regex = Regex.compile!(re)
+
+    case Regex.run(regex, str) do
+      # no substring match
+      nil -> false
+      # at least one substring match
+      _ -> true
+    end
+  end
+
   # Unknown function
   defp apply_function(_name, _args, _node), do: nil
   # Entry point
@@ -654,6 +742,76 @@ defmodule JsonPath do
               _ ->
                 []
             end
+
+          {:qdescendant_name, name} ->
+            # Collect all descendants and look for the name
+            descendants = collect_descendants_for_query({path, node})
+
+            Enum.flat_map(descendants, fn {desc_path, desc_node} ->
+              case desc_node do
+                %{} = m ->
+                  name_str = to_string(name)
+
+                  case Map.fetch(m, name_str) do
+                    {:ok, v} ->
+                      [{desc_path ++ [name_str], v}]
+
+                    :error ->
+                      []
+                  end
+
+                _ ->
+                  []
+              end
+            end)
+
+          {:qdescendant_wildcard} ->
+            # Collect all descendants and apply wildcard to each
+            descendants = collect_descendants_for_query({path, node})
+
+            Enum.flat_map(descendants, fn {desc_path, desc_node} ->
+              case desc_node do
+                %{} = m ->
+                  Enum.map(Map.to_list(m), fn {k, v} -> {desc_path ++ [to_string(k)], v} end)
+
+                l when is_list(l) ->
+                  Enum.with_index(l) |> Enum.map(fn {v, i} -> {desc_path ++ [i], v} end)
+
+                _ ->
+                  []
+              end
+            end)
+
+          {:qdescendant_index, idx} when is_integer(idx) ->
+            # Collect all descendants and apply index to lists
+            descendants = collect_descendants_for_query({path, node})
+
+            Enum.flat_map(descendants, fn {desc_path, desc_node} ->
+              case desc_node do
+                l when is_list(l) ->
+                  n = length(l)
+                  i = if idx < 0, do: n + idx, else: idx
+                  if i >= 0 and i < n, do: [{desc_path ++ [i], Enum.at(l, i)}], else: []
+
+                _ ->
+                  []
+              end
+            end)
+
+          {:qdescendant_slice, slice} ->
+            # Collect all descendants and apply slice to lists
+            descendants = collect_descendants_for_query({path, node})
+
+            Enum.flat_map(descendants, fn {desc_path, desc_node} ->
+              case desc_node do
+                l when is_list(l) ->
+                  indices = normalize_slice(length(l), slice)
+                  Enum.map(indices, fn i -> {desc_path ++ [i], Enum.at(l, i)} end)
+
+                _ ->
+                  []
+              end
+            end)
         end
       end)
 
@@ -672,6 +830,36 @@ defmodule JsonPath do
         part when is_atom(part) ->
           "['#{escape_json_string(Atom.to_string(part))}']"
       end)
+  end
+
+  defp collect_descendants_for_query({path, value}) do
+    case value do
+      %{} = m ->
+        base = [{path, value}]
+
+        children =
+          Enum.flat_map(Map.to_list(m), fn {k, v} ->
+            child_path = path ++ [to_string(k)]
+            collect_descendants_for_query({child_path, v})
+          end)
+
+        base ++ children
+
+      l when is_list(l) ->
+        base = [{path, value}]
+
+        children =
+          Enum.with_index(l)
+          |> Enum.flat_map(fn {v, idx} ->
+            child_path = path ++ [idx]
+            collect_descendants_for_query({child_path, v})
+          end)
+
+        base ++ children
+
+      _ ->
+        [{path, value}]
+    end
   end
 
   defp lookup(map, key, opts) when is_map(map) do

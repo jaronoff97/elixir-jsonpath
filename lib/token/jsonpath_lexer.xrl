@@ -70,27 +70,37 @@ lexeme_to_string(Chars) ->
 
 %% convert number lexeme text into number (integer or float)
 list_to_number(Chars) ->
-    S = list_to_binary(Chars),
-    case binary_to_float_maybe(S) of
-      {ok, N} -> N;
-      error ->
-        try
-          list_to_integer(Chars)
-        catch
-          error:badarg -> 0  %% fallback for malformed numbers
-        end
+    Str = lists:flatten(Chars),
+    Fixed =
+        case re:run(Str, "^[+-]?[0-9]+[eE][+-]?[0-9]+$") of
+            {match, _} -> insert_decimal(Str);
+            nomatch -> Str
+        end,
+    try
+        list_to_integer(Fixed)
+    catch
+        _:_ ->
+            list_to_float(Fixed)
     end.
 
-%% try float parse
-binary_to_float_maybe(Bin) ->
-    try
-        case string:to_float(binary_to_list(Bin)) of
-            {error, no_float} -> error;
-            {F, _} -> {ok, F}
-        end
-    catch
-        _:_ -> error
+insert_decimal(Str) ->
+    %% Split on first e/E and insert ".0"
+    case string:chr(Str, $e) of
+        0 ->   % no 'e', maybe 'E'
+            case string:chr(Str, $E) of
+                0 -> Str;
+                Pos ->
+                    Base = string:substr(Str, 1, Pos-1),
+                    Exp  = string:substr(Str, Pos),
+                    Base ++ ".0" ++ Exp
+            end;
+        Pos ->
+            Base = string:substr(Str, 1, Pos-1),
+            Exp  = string:substr(Str, Pos),
+            Base ++ ".0" ++ Exp
     end.
+
+
 
 %% unescapes common JSON escapes
 unescape_json_string(Bin) ->

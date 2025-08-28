@@ -79,17 +79,31 @@ selector -> slice : { slice , '$1' } .
 selector -> QMARK or_expr : { filter , '$2' } .
 
 %% Slices (minimal set that evaluator normalizes)
+% Basic cases
 slice -> NUMBER COLON NUMBER : { start_end , unwrap_number( '$1' ) , unwrap_number( '$3' ) } .
 
 slice -> NUMBER COLON NUMBER COLON NUMBER : { start_end_step , unwrap_number( '$1' ) , unwrap_number( '$3' ) , unwrap_number( '$5' ) } .
 
-slice -> NUMBER COLON : { start_end_omitted , unwrap_number( '$1' ) } .
-
+% Start omitted cases
 slice -> COLON NUMBER : { start_omitted_end , unwrap_number( '$2' ) } .
 
-slice -> COLON COLON NUMBER : { start_omitted_end_step , unwrap_number( '$3' ) } .
+slice -> COLON NUMBER COLON NUMBER : { start_omitted_end_step , unwrap_number( '$2' ) , unwrap_number( '$4' ) } .
 
+slice -> COLON NUMBER COLON : { start_omitted_end , unwrap_number( '$2' ) } .
+
+% End omitted cases
+slice -> NUMBER COLON : { start_end_omitted , unwrap_number( '$1' ) } .
+
+slice -> NUMBER COLON COLON : { start_end_omitted , unwrap_number( '$1' ) } .
+
+slice -> NUMBER COLON COLON NUMBER : { start_end_omitted_step , unwrap_number( '$1' ) , unwrap_number( '$4' ) } .
+
+% Both start and end omitted
 slice -> COLON : { omitted_all } .
+
+slice -> COLON COLON : { omitted_all } .
+
+slice -> COLON COLON NUMBER : { start_omitted_end_step , unwrap_number( '$3' ) } .
 
 %% -------------------------------------------------------------------
 %% Filter expressions
@@ -130,6 +144,8 @@ primary -> AT q_segments : { query , relative , '$2' } .
 
 primary -> AT : { query , relative , [ ] } .
 
+primary -> DOLLAR : { query , absolute , [ ] } .
+
 primary -> DOLLAR q_segments : { query , absolute , '$2' } .
 
 primary -> LPAREN or_expr RPAREN : '$2' .
@@ -150,6 +166,18 @@ q_seg -> LBRACK NUMBER RBRACK : { qindex , unwrap_number( '$2' ) } .
 q_seg -> LBRACK STAR RBRACK : { qwildcard } .
 
 q_seg -> LBRACK slice RBRACK : { qslice , '$2' } .
+
+q_seg -> DDOT IDENT : { qdescendant_name , unwrap_ident( '$2' ) } .
+
+q_seg -> DDOT STAR : { qdescendant_wildcard } .
+
+q_seg -> DDOT LBRACK STRING RBRACK : { qdescendant_name , unwrap_string( '$3' ) } .
+
+q_seg -> DDOT LBRACK NUMBER RBRACK : { qdescendant_index , unwrap_number( '$3' ) } .
+
+q_seg -> DDOT LBRACK STAR RBRACK : { qdescendant_wildcard } .
+
+q_seg -> DDOT LBRACK slice RBRACK : { qdescendant_slice , '$3' } .
 
 %% Literals (numbers, strings, booleans, null)
 literal -> NUMBER : { lit , unwrap_number( '$1' ) } .

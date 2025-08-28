@@ -176,6 +176,46 @@ defmodule OneOffTest do
       end)
     end
 
+    test "single-node arg" do
+      t = ~s({
+        "name": "single-node arg",
+        "selector": "$[?count(@.a\)>1]",
+        "document": [
+          {
+            "a": [
+              1,
+              2,
+              3
+            ]
+          },
+          {
+            "a": [
+              1
+            ],
+            "d": "f"
+          },
+          {
+            "a": 1,
+            "d": "f"
+          }
+        ],
+        "result": [],
+        "result_paths": [],
+        "tags": [
+          "function",
+          "count"
+        ]
+      })
+      test_case = Jason.decode!(t)
+      IO.inspect(JsonPath.tokenize(test_case["selector"]))
+
+      assert [{result_path, result}] =
+               JsonPath.query(test_case["document"], test_case["selector"])
+
+      assert [result_path] == test_case["result_paths"]
+      assert [result] == test_case["result"]
+    end
+
     test "double quotes, surrogate pair 😀" do
       result_pairs =
         JsonPath.query(
