@@ -30,24 +30,24 @@ defmodule OneOffTest do
 
     test "spaces in an absolute singular selector" do
       t = ~s({
-        "name": "spaces in an absolute singular selector",
-        "selector": "$..[?length(@\)==length($ [0] .a\)]",
+        "name": "at the end",
+        "selector": "$[?search(@.a, 'a.*'\)]",
         "document": [
           {
-            "a": "foo"
-          },
-          {}
+            "a": "the end is ab"
+          }
         ],
         "result": [
-          "foo"
+          {
+            "a": "the end is ab"
+          }
         ],
         "result_paths": [
-          "$[0]['a']"
+          "$[0]"
         ],
         "tags": [
-          "whitespace",
           "function",
-          "length"
+          "search"
         ]
       })
       test_case = Jason.decode!(t)
@@ -176,34 +176,36 @@ defmodule OneOffTest do
       end)
     end
 
-    test "single-node arg" do
+    test "equals, empty node list and special nothing" do
       t = ~s({
-        "name": "single-node arg",
-        "selector": "$[?count(@.a\)>1]",
+        "name": "equals, empty node list and special nothing",
+        "selector": "$[?@.a == length(@.b\)]",
         "document": [
           {
-            "a": [
-              1,
-              2,
-              3
-            ]
+            "a": 1
           },
           {
-            "a": [
-              1
-            ],
-            "d": "f"
+            "b": 2
           },
           {
-            "a": 1,
-            "d": "f"
+            "c": 3
           }
         ],
-        "result": [],
-        "result_paths": [],
+        "result": [
+          {
+            "b": 2
+          },
+          {
+            "c": 3
+          }
+        ],
+        "result_paths": [
+          "$[1]",
+          "$[2]"
+        ],
         "tags": [
-          "function",
-          "count"
+          "whitespace",
+          "function"
         ]
       })
       test_case = Jason.decode!(t)
