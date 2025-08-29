@@ -110,6 +110,7 @@ defmodule JsonPath do
 
     expanded =
       Enum.flat_map(nodes, fn {path, node} ->
+        # IO.inspect({seg, path, node}, label: "traversal")
         apply_segment(seg, {path, node}, opts_with_root)
       end)
 
@@ -830,7 +831,7 @@ defmodule JsonPath do
         end
 
       {:atom, k} when is_binary(k) ->
-        atom_key = String.to_existing_atom(k)
+        atom_key = String.to_atom(k)
 
         case Map.fetch(map, atom_key) do
           {:ok, v} -> {:ok, v, atom_key}
@@ -845,7 +846,7 @@ defmodule JsonPath do
             {:ok, v, str_k}
 
           :error ->
-            atom_k = String.to_existing_atom(str_k)
+            atom_k = String.to_atom(str_k)
 
             case Map.fetch(map, atom_k) do
               {:ok, v} -> {:ok, v, atom_k}
